@@ -1,6 +1,6 @@
 # OpenAI Model for ADK-Go
 
-This package provides an OpenAI model implementation for the ADK-Go framework.
+This package provides an OpenAI model implementation for the [ADK-Go](https://github.com/google/adk-go) framework.
 
 ## Usage
 `go get github.com/byebyebruce/adk-go-openai`
