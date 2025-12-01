@@ -103,6 +103,7 @@ func (o *OpenAIModel) generateStream(ctx context.Context, req *model.LLMRequest)
 		// Track tool calls by index to properly aggregate them across chunks
 		toolCallsMap := make(map[int]*toolCallBuilder)
 
+		lastPartIsText := false
 		for {
 			chunk, err := stream.Recv()
 			if err != nil {
@@ -122,8 +123,13 @@ func (o *OpenAIModel) generateStream(ctx context.Context, req *model.LLMRequest)
 			// Handle delta content
 			if choice.Delta.Content != "" {
 				part := &genai.Part{Text: choice.Delta.Content}
-				aggregatedContent.Parts = append(aggregatedContent.Parts, part)
+				if lastPartIsText {
+					aggregatedContent.Parts[len(aggregatedContent.Parts)-1].Text += part.Text
+				} else {
+					aggregatedContent.Parts = append(aggregatedContent.Parts, part)
+				}
 
+				lastPartIsText = true
 				// Yield partial response
 				llmResp := &model.LLMResponse{
 					Content:      &genai.Content{Role: "model", Parts: []*genai.Part{part}},
@@ -133,6 +139,8 @@ func (o *OpenAIModel) generateStream(ctx context.Context, req *model.LLMRequest)
 				if !yield(llmResp, nil) {
 					return
 				}
+			} else {
+				lastPartIsText = false
 			}
 
 			// Handle tool calls in delta - aggregate across chunks
@@ -233,11 +241,11 @@ type toolCallBuilder struct {
 func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string) (openai.ChatCompletionRequest, error) {
 	openaiMessages := make([]openai.ChatCompletionMessage, 0, len(req.Contents))
 	for _, content := range req.Contents {
-		msg, err := toOpenAIChatCompletionMessage(content)
+		msgs, err := toOpenAIChatCompletionMessage(content)
 		if err != nil {
 			return openai.ChatCompletionRequest{}, err
 		}
-		openaiMessages = append(openaiMessages, msg)
+		openaiMessages = append(openaiMessages, msgs...)
 	}
 
 	openaiReq := openai.ChatCompletionRequest{
@@ -290,15 +298,41 @@ func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string) (ope
 	return openaiReq, nil
 }
 
-func toOpenAIChatCompletionMessage(content *genai.Content) (openai.ChatCompletionMessage, error) {
+func toOpenAIChatCompletionMessage(content *genai.Content) ([]openai.ChatCompletionMessage, error) {
+	// Special: if all parts are function responses, return multi tool message
+	toolRespMessages := make([]openai.ChatCompletionMessage, 0)
+	skipIdx := 0
+	for idx, part := range content.Parts {
+		if part.FunctionResponse != nil {
+			openaiMsg := openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				ToolCallID: part.FunctionResponse.ID,
+			}
+			// Function responses become tool messages
+			responseJSON, err := json.Marshal(part.FunctionResponse.Response)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal function response: %w", err)
+			}
+			openaiMsg.Content = string(responseJSON)
+			toolRespMessages = append(toolRespMessages, openaiMsg)
+			skipIdx = idx + 1
+			continue
+		}
+	}
+
+	parts := content.Parts[skipIdx:]
+	if len(parts) == 0 {
+		return toolRespMessages, nil
+	}
+
 	openaiMsg := openai.ChatCompletionMessage{
 		Role: convertRoleToOpenAI(content.Role),
 	}
 
 	// Simple case: single text part
-	if len(content.Parts) == 1 && content.Parts[0].Text != "" {
-		openaiMsg.Content = content.Parts[0].Text
-		return openaiMsg, nil
+	if len(parts) == 1 && parts[0].Text != "" {
+		openaiMsg.Content = parts[0].Text
+		return []openai.ChatCompletionMessage{openaiMsg}, nil
 	}
 
 	// Complex case: multiple parts or special part types
@@ -306,7 +340,7 @@ func toOpenAIChatCompletionMessage(content *genai.Content) (openai.ChatCompletio
 	var toolCalls []openai.ToolCall
 	var multiContent []openai.ChatMessagePart
 
-	for _, part := range content.Parts {
+	for _, part := range parts {
 		if part.Text != "" {
 			if len(content.Parts) == 1 {
 				textContent = part.Text
@@ -321,7 +355,7 @@ func toOpenAIChatCompletionMessage(content *genai.Content) (openai.ChatCompletio
 		if part.FunctionCall != nil {
 			argsJSON, err := json.Marshal(part.FunctionCall.Args)
 			if err != nil {
-				return openai.ChatCompletionMessage{}, fmt.Errorf("failed to marshal function args: %w", err)
+				return nil, fmt.Errorf("failed to marshal function args: %w", err)
 			}
 			toolCall := openai.ToolCall{
 				ID:   part.FunctionCall.ID,
@@ -338,7 +372,7 @@ func toOpenAIChatCompletionMessage(content *genai.Content) (openai.ChatCompletio
 			// Function responses become tool messages
 			responseJSON, err := json.Marshal(part.FunctionResponse.Response)
 			if err != nil {
-				return openai.ChatCompletionMessage{}, fmt.Errorf("failed to marshal function response: %w", err)
+				return nil, fmt.Errorf("failed to marshal function response: %w", err)
 			}
 			openaiMsg.Role = openai.ChatMessageRoleTool
 			openaiMsg.Content = string(responseJSON)
@@ -375,7 +409,7 @@ func toOpenAIChatCompletionMessage(content *genai.Content) (openai.ChatCompletio
 		openaiMsg.ToolCalls = toolCalls
 	}
 
-	return openaiMsg, nil
+	return append(toolRespMessages, openaiMsg), nil
 }
 
 func convertChatCompletionResponse(resp *openai.ChatCompletionResponse) (*model.LLMResponse, error) {
