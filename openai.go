@@ -485,6 +485,9 @@ func convertTools(genaiTools []*genai.Tool) ([]openai.Tool, error) {
 					Parameters:  funcDecl.ParametersJsonSchema,
 				},
 			}
+			if openaiTool.Function.Parameters == nil {
+				openaiTool.Function.Parameters = funcDecl.Parameters
+			}
 			openaiTools = append(openaiTools, openaiTool)
 		}
 	}
