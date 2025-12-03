@@ -86,4 +86,5 @@ func main() {
 `export OPENAI_BASE_URL='http://localhost:11434/v1/'`
 
 ## Example
-[Example](example)
+[deepwiki-cli](example/deepwiki-cli)
+[quickstart](example/quickstart)
