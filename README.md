@@ -81,5 +81,9 @@ func main() {
 	}
 }
 ```
+
+## For Ollama
+`export OPENAI_BASE_URL='http://localhost:11434/v1/'`
+
 ## Example
 [Example](example)
