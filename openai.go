@@ -252,6 +252,26 @@ func toOpenAIChatCompletionRequest(req *model.LLMRequest, modelName string) (ope
 		Model:    modelName,
 		Messages: openaiMessages,
 	}
+	if req.Config.ThinkingConfig != nil {
+		switch req.Config.ThinkingConfig.ThinkingLevel {
+		case genai.ThinkingLevelLow:
+			openaiReq.ReasoningEffort = "low"
+		case genai.ThinkingLevelHigh:
+			openaiReq.ReasoningEffort = "high"
+		default:
+			openaiReq.ReasoningEffort = "medium"
+		}
+	}
+	if req.Config.ResponseJsonSchema != nil {
+		// TODO: convert schema to openai schema
+		return openai.ChatCompletionRequest{}, fmt.Errorf("response json schema is not supported")
+		/*
+			openaiReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
+				Type:       openai.ChatCompletionResponseFormatTypeJSONObject,
+				JSONSchema: req.Config.ResponseJsonSchema,
+			}
+		*/
+	}
 
 	// Convert tools if present
 	if req.Config != nil && len(req.Config.Tools) > 0 {
@@ -470,13 +490,17 @@ func convertTools(genaiTools []*genai.Tool) ([]openai.Tool, error) {
 			continue
 		}
 
+		// TODO
+		if genaiTool.GoogleSearch != nil ||
+			genaiTool.CodeExecution != nil ||
+			genaiTool.FileSearch != nil ||
+			genaiTool.Retrieval != nil ||
+			genaiTool.ComputerUse != nil {
+			return nil, fmt.Errorf("GoogleSearch is not supported")
+		}
+
 		// Convert function declarations
 		for _, funcDecl := range genaiTool.FunctionDeclarations {
-			if funcDecl == nil {
-				// Only supports custom tools, not built-in tools
-				panic("funcDecl is nil")
-			}
-
 			openaiTool := openai.Tool{
 				Type: openai.ToolTypeFunction,
 				Function: &openai.FunctionDefinition{
@@ -488,6 +512,10 @@ func convertTools(genaiTools []*genai.Tool) ([]openai.Tool, error) {
 			if openaiTool.Function.Parameters == nil {
 				openaiTool.Function.Parameters = funcDecl.Parameters
 			}
+			if openaiTool.Function.Parameters == nil {
+				return nil, fmt.Errorf("funcDecl.Parameters is nil for tool %s", funcDecl.Name)
+			}
+
 			openaiTools = append(openaiTools, openaiTool)
 		}
 	}
